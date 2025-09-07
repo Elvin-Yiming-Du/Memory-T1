@@ -14,6 +14,31 @@ import time
 import torch
 import torch_npu  # 导入NPU支持库
 from transformers import AutoTokenizer
+from datetime import datetime
+
+
+with open("/home/ma-user/work/ydu/data/time_range/question_time_range_annotated_0717.json", "r", encoding="utf-8") as f:
+    QUESTION_TIME_RANGE_MAP = json.load(f)
+
+def extract_time_range_from_question(question_id):
+    # 直接查表
+    item = QUESTION_TIME_RANGE_MAP.get(str(question_id))
+    
+    if item and "question_time_range" in item:
+        time_range = item["question_time_range"]
+        start_time = "1900-01-01" if time_range["start"] == "unknown" else time_range["start"]
+        end_time = "2025-09-01" if time_range["end"] == "unknown" else time_range["end"]
+        return {
+            "start": datetime.fromisoformat(start_time).date(),
+            "end": datetime.fromisoformat(end_time or datetime.now().isoformat()).date()
+        }
+    else:
+        # 没找到时返回默认的date类型，end为当前日期
+        return {
+            "start": datetime.strptime("1900-01-01", "%Y-%m-%d").date(),
+            "end": date.today()
+        }
+
 
 # 检查是否有NPU可用
 device = "npu" if torch.npu.is_available() else "cpu"
@@ -40,7 +65,7 @@ def format_session_context(session_id, session: Dict) -> str:
     utterances = []
     for utterance in session.get('content', []):
         # utterance_text = f"{utterance.get('speaker')} : {utterance.get('utterance_date')} : {utterance.get('utterance')}"
-        utterance_text = f"{utterance.get('speaker')} : {utterance.get('utterance_date')} : {utterance.get('utterance')}"
+        utterance_text = f"{utterance.get('speaker')} : {utterance.get('utterance')}"
         utterances.append(utterance_text)
     context += "\n".join(utterances)
     return context
@@ -174,6 +199,7 @@ def infer_with_local_model(prompt, tokenizer, model, temperature=0.1, top_p=0.95
     generated_ids = outputs[0][input_token_len:]
     answer = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
     print(answer)
+    torch.npu.empty_cache()
     return answer
     
 def parse_model_output(output):
@@ -196,7 +222,8 @@ def load_model_and_tokenizer(base_model_path, lora_model_path=""):
         base_model_path,
         device_map=None,  # 禁用自动设备映射
         torch_dtype=torch.bfloat16,
-        trust_remote_code=True
+        trust_remote_code=True,
+        do_sample=False,
     ).to(target_device)
     
     if lora_model_path != "":
@@ -214,16 +241,19 @@ def main():
     # ====== 路径配置（请根据实际情况修改） ======
     time_contexts = load_time_contexts()
     question_file = "/home/ma-user/work/ydu/data/time_range/time_dial_context_list_with_evidence_200_v2.json"  # 问题列表，每个元素至少有Question字段
-    output_file = "/home/ma-user/work/ydu/temporal_reasoning/results/qwen2.5-3B-Instruct-Time-acc-tc-ac-rwd-v1.json"
-    max_prompt_length = 15500
-    base_model_path = "/home/ma-user/work/ydu/models/MyTrain/Qwen2.5-3B-Instruct-Time-acc-tc-ac-rwd-v1/"
-    # base_model_path = "/home/ma-user/work/ydu/models/MyTrain/Qwen2.5-3B-Instruct-Time-RL-acc-0823"  # 基础模型路径
-    # lora_model_path = "/home/ma-user/work/ydu/models/MyTrain/Qwen2.5-7B-Instruct-Time-SFT/lora_adapter"
+    question_time_range_file = "/home/ma-user/work/ydu/data/time_range/question_time_range_annotated_0717.json"
+    output_file = "/home/ma-user/work/ydu/temporal_reasoning/results/time_range_Llama-3-8B-Instruct_without_utt_time_0901.json"
+    max_prompt_length = 7500
+    base_model_path = "/home/ma-user/work/ydu/models/Llama/Llama-3-8B-Instruct"
     lora_model_path=""
     tokenizer, model = load_model_and_tokenizer(base_model_path, lora_model_path)
 
     # ====== 加载数据 ======
     print("Loading sessions and questions...")
+    with open(question_time_range_file, 'r', encoding='utf-8') as f:
+        time_ranges = json.load(f)
+        
+    print("Loading question time range...")
     with open(question_file, 'r', encoding='utf-8') as f:
         questions = json.load(f)
 
@@ -231,6 +261,7 @@ def main():
     results = []
     recall_at_5 = 0
     total = 0
+    fail_generation_counter = 0
     for i, question in enumerate(questions):
         print(f"\nProcessing question {i+1}/{len(questions)}")
         query = question["Question"]
@@ -238,7 +269,18 @@ def main():
         # 1. BM25检索top5
         session_context = question.get('Context', '')
         evidence_sessions = time_contexts[session_context]
-        top_ids = bm25_retriever(query, evidence_sessions, top_k=10)
+        time_range =extract_time_range_from_question(question.get("Question ID"))
+        print(time_range)
+        # print(time_range)
+        candidate_sessions = {}
+        for session_id, session in evidence_sessions.items():
+            session_time = session.get('session_date', '')
+            session_date = datetime.fromisoformat(session_time).date()
+            if time_range["start"] <= session_date <= time_range["end"]:
+                candidate_sessions[session_id] = session
+        if len(candidate_sessions) == 0:
+            candidate_sessions = evidence_sessions
+        top_ids = bm25_retriever(query, candidate_sessions, top_k=10)
         # Recall@5: gold_sessions为list，统计每个gold session是否在top5_ids中
         retrieved_sessions = []
         load_sessions_length = 0
@@ -258,10 +300,19 @@ def main():
         CURRENT_TIME = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         # 2. 本地模型推理
         prompt = build_prompt(query, "\n".join(retrieved_sessions), CURRENT_TIME)
-        answer = infer_with_local_model(prompt, tokenizer, model)
-        parsed = parse_model_output(answer)
-        print("parsed_result:",parsed)
-        print("gold_answer:",question.get("Gold Answer", ""))
+        try:
+            answer = infer_with_local_model(prompt, tokenizer, model)
+            print("original answer",answer)
+            parsed = parse_model_output(answer)
+            print("parsed_result:",parsed)
+            print("gold_answer:",question.get("Gold Answer", ""))
+        except Exception as e:
+            fail_generation_counter += 1
+            print(e)
+            answer = ""
+            parsed = ""
+        
+        print("fail_generation_counter:", fail_generation_counter)
 
         result = {
             "question_id": question.get("Question ID"),

@@ -1,3 +1,5 @@
+# 该评测只是评测过程的一部分，第一部分的记忆选择在time_qa_eval.py的脚本中完成。
+
 import json
 import os
 from typing import Dict, List, Any
@@ -14,6 +16,9 @@ import time
 import torch
 import torch_npu  # 导入NPU支持库
 from transformers import AutoTokenizer
+import random  # 添加random模块
+import random
+import math
 
 # 检查是否有NPU可用
 device = "npu" if torch.npu.is_available() else "cpu"
@@ -39,7 +44,6 @@ def format_session_context(session_id, session: Dict) -> str:
     context = f"{session.get('session_date')}: <{str(session_id)}>, "
     utterances = []
     for utterance in session.get('content', []):
-        # utterance_text = f"{utterance.get('speaker')} : {utterance.get('utterance_date')} : {utterance.get('utterance')}"
         utterance_text = f"{utterance.get('speaker')} : {utterance.get('utterance_date')} : {utterance.get('utterance')}"
         utterances.append(utterance_text)
     context += "\n".join(utterances)
@@ -51,42 +55,6 @@ def format_session_for_prompt(session_id, session):
     for utt in session.get('content', []):
         lines.append(f"{utt.get('utterance_time', '')}: {session_id}: {utt.get('speaker', '')}: {utt.get('content', '')}")
     return f"{session_time}: {session_id}:\n" + "\n".join(lines)
-
-def bm25_retriever(query: str, sessions: Dict, top_k: int = 10) -> List[str]:
-    """
-    使用BM25检索相关会话
-    
-    Args:
-        query: 查询文本
-        sessions: 会话数据
-        top_k: 返回的会话数量
-    
-    Returns:
-        相关会话ID列表
-    """
-    # 准备文档和ID
-    documents = []
-    session_ids = []
-    
-    for session_id, session in sessions.items():
-        # 格式化会话内容
-        doc = format_session_context(session_id, session)
-        documents.append(doc)
-        session_ids.append(session_id)
-    
-    # 创建BM25索引
-    tokenized_docs = [doc.split() for doc in documents]
-    bm25 = BM25Okapi(tokenized_docs)
-    
-    # 对查询进行检索
-    tokenized_query = query.split()
-    scores = bm25.get_scores(tokenized_query)
-    
-    # 获取top-k结果
-    top_indices = np.argsort(scores)[-top_k:][::-1]
-    retrieved_ids = [session_ids[i] for i in top_indices]
-    
-    return retrieved_ids
 
 def parse_gpt_session_output(json_str: str) -> Dict[str, Any]:
     try:
@@ -214,13 +182,15 @@ def main():
     # ====== 路径配置（请根据实际情况修改） ======
     time_contexts = load_time_contexts()
     question_file = "/home/ma-user/work/ydu/data/time_range/time_dial_context_list_with_evidence_200_v2.json"  # 问题列表，每个元素至少有Question字段
-    output_file = "/home/ma-user/work/ydu/temporal_reasoning/results/qwen2.5-3B-Instruct-Time-acc-tc-ac-rwd-v1.json"
+    output_file = "/home/ma-user/work/ydu/temporal_reasoning/results/select_then_infer/gold_with_noise_acc_results_0826_03.json"
     max_prompt_length = 15500
-    base_model_path = "/home/ma-user/work/ydu/models/MyTrain/Qwen2.5-3B-Instruct-Time-acc-tc-ac-rwd-v1/"
-    # base_model_path = "/home/ma-user/work/ydu/models/MyTrain/Qwen2.5-3B-Instruct-Time-RL-acc-0823"  # 基础模型路径
-    # lora_model_path = "/home/ma-user/work/ydu/models/MyTrain/Qwen2.5-7B-Instruct-Time-SFT/lora_adapter"
+    base_model_path = "/home/ma-user/work/ydu/models/MyTrain/Qwen2.5-3B-Instruct-Time-RL-acc-0823"
     lora_model_path=""
     tokenizer, model = load_model_and_tokenizer(base_model_path, lora_model_path)
+    
+
+    # 设置随机种子以确保结果可复现
+    random.seed(42)
 
     # ====== 加载数据 ======
     print("Loading sessions and questions...")
@@ -229,7 +199,6 @@ def main():
 
     # ====== 主流程 ======
     results = []
-    recall_at_5 = 0
     total = 0
     for i, question in enumerate(questions):
         print(f"\nProcessing question {i+1}/{len(questions)}")
@@ -238,52 +207,84 @@ def main():
         # 1. BM25检索top5
         session_context = question.get('Context', '')
         evidence_sessions = time_contexts[session_context]
-        top_ids = bm25_retriever(query, evidence_sessions, top_k=10)
-        # Recall@5: gold_sessions为list，统计每个gold session是否在top5_ids中
-        retrieved_sessions = []
-        load_sessions_length = 0
+        gold_session_ids = []
+        print(f"\nProcessing question {i+1}/{len(questions)}")
 
-        for retrieved_id in top_ids:
-            formatted_session_content = format_session_context(retrieved_id, evidence_sessions[retrieved_id])
-            load_sessions_length += count_tokens(formatted_session_content)
-            if load_sessions_length < max_prompt_length:
-                retrieved_sessions.append(formatted_session_content)
-            else:
-                break
+        # 获取金标准ID列表
+        gold_sessions = question.get('Evidence', [])
         if gold_sessions:
             for evident_session in gold_sessions:
-                if evident_session["session_id"] in top_ids:
-                    recall_at_5 += 1
-            total += len(gold_sessions)
+                gold_session_ids.append(evident_session["session_id"])
+        
+        # 获取当前上下文中的所有会话ID
+        all_session_ids = list(evidence_sessions.keys())
+        
+        # 随机选择50%的金标准会话替换为噪声会话
+        target_ratio = 0.3
+        k = len(gold_session_ids)
+        r = k * target_ratio
+        num_to_replace = math.floor(r) + (1 if random.random() < (r-math.floor(r)) else 0)
+        
+        sessions_to_replace = random.sample(gold_session_ids, num_to_replace)
+        
+        # 创建用于构建上下文的会话ID列表
+        selected_session_ids = []
+        for session_id in gold_session_ids:
+            if session_id in sessions_to_replace:
+                # 从非金标准会话中随机选择一个作为噪声
+                non_gold_sessions = [s for s in all_session_ids if s not in gold_session_ids]
+                if non_gold_sessions:  # 确保有非金标准会话可用
+                    noise_session = random.choice(non_gold_sessions)
+                    selected_session_ids.append(noise_session)
+                else:
+                    # 如果没有非金标准会话，保留原会话
+                    selected_session_ids.append(session_id)
+            else:
+                selected_session_ids.append(session_id)
+        
+        load_sessions_length = 0
+        selected_sessions_context = []
+        for session_id in selected_session_ids:
+            formatted_session_content = format_session_context(session_id, evidence_sessions[session_id])
+            load_sessions_length += count_tokens(formatted_session_content)
+            if load_sessions_length < max_prompt_length:
+                selected_sessions_context.append(formatted_session_content)
+            else:
+                break
+
         CURRENT_TIME = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        
         # 2. 本地模型推理
-        prompt = build_prompt(query, "\n".join(retrieved_sessions), CURRENT_TIME)
+        prompt = build_prompt(query, "\n".join(selected_sessions_context), CURRENT_TIME)
         answer = infer_with_local_model(prompt, tokenizer, model)
         parsed = parse_model_output(answer)
         print("parsed_result:",parsed)
         print("gold_answer:",question.get("Gold Answer", ""))
+
+        # 记录哪些会话被替换了
+        replaced_sessions = {}
+        for i, session_id in enumerate(gold_session_ids):
+            if session_id in sessions_to_replace:
+                replaced_sessions[session_id] = selected_session_ids[i] if i < len(selected_session_ids) else session_id
 
         result = {
             "question_id": question.get("Question ID"),
             "question": query,
             "level": question.get("Level"),
             "task": question.get("Task"),
-            "bm25_top5_session_ids": top_ids,
             "prompt": prompt,
             "model_output": answer,
             "parsed_output": parsed,
-            "gold_answer": question.get("Gold Answer", "")
+            "gold_answer": question.get("Gold Answer", ""),
+            "replaced_sessions": replaced_sessions,  # 记录被替换的会话
+            "recall_rate": 0.3  # 记录召回率
         }
         results.append(result)
         # 保存中间结果
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
         print(f"Saved intermediate results to {output_file}")
-    # if total > 0:
-    #     print(f"Recall@5: {recall_at_5/total:.3f}")
-    # else:
-    #     print("No gold session provided, Recall@5 not computed.")
     print(f"\nProcessing complete. Results saved to {output_file}")
 
 if __name__ == "__main__":
-    main() 
+    main()

@@ -348,15 +348,12 @@ def compute_accuracy_by_task(filepath: str, output_csv: str = None):
     with open(filepath, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    # with open("/home/ubuntu/cloud_disk/temporal_reasoning/bm25_base_results.json", 'r', encoding='utf-8') as f2:
-    #     ref_data = json.load(f2)
-
     grouped = defaultdict(list)
-    for i, (item, ref_item) in enumerate(zip(data, data)):
-        task = ref_item.get("task", "Unknown")
+    for i, item in enumerate(data):
+        task = item.get("task", "Unknown")
         pred_ans = extract_option(item.get("parsed_output", {}).strip())
         gold_ans = item.get("gold_answer", "").strip()
-                # 统一格式化日期
+        # 统一格式化日期
         pred_ans = normalize_date(pred_ans)
         gold_ans = normalize_date(gold_ans)
         
@@ -366,6 +363,14 @@ def compute_accuracy_by_task(filepath: str, output_csv: str = None):
     print("PER TASK METRICS")
     print("=" * 80)
 
+    # 定义输出顺序
+    output_order = ['Localization', 'Duration_Compare', 'Computation', 'Order_Compare', 
+                   'Extract', 'Explicit_Reasoning', 'Order_Reasoning', 'Relative_Reasoning', 
+                   'Counterfactual', 'Co_temporality', 'Timeline']
+    
+    # 存储每个任务的结果
+    task_results = {}
+    
     all_f1 = []
     all_prec = []
     all_recall = []
@@ -373,22 +378,17 @@ def compute_accuracy_by_task(filepath: str, output_csv: str = None):
     all_TP, all_FP, all_FN = 0, 0, 0
 
     failure_cases = []
-
+    
     for task, items in grouped.items():
         task_prec, task_recall, task_f1, task_em = [], [], [], []
         for idx, (pred, gold, raw_item) in enumerate(items):
             
             pred_set = extract_options(pred)
             gold_set = extract_options(gold)
-            # print("-"*50)
-            # print(pred)
-            # print(gold)
-            # print("-"*50)
+            
             if task == "Computation":
-              
                 metrics = calculate_computation_metrics(pred, gold)
             elif task == "Timeline":
-               
                 metrics = calculate_timeline_metrics(pred, gold)
             elif task == "Localization":
                 metrics = calculate_localization_metrics(pred, gold)
@@ -418,13 +418,22 @@ def compute_accuracy_by_task(filepath: str, output_csv: str = None):
                     "precision": metrics["precision"],
                     "recall": metrics["recall"]
                 })
-
+        
+        # 存储任务结果
+        task_results[task] = {
+            "samples": len(items),
+            "exact_match": sum(task_em)/len(task_em) if task_em else 0,
+            "f1_score": sum(task_f1)/len(task_f1) if task_f1 else 0,
+            "precision": sum(task_prec)/len(task_prec) if task_prec else 0,
+            "recall": sum(task_recall)/len(task_recall) if task_recall else 0
+        }
+        
         print(f"\nTask: {task}")
         print(f"  Samples: {len(items)}")
-        print(f"  Exact Match: {sum(task_em)/len(task_em):.4f}")
-        print(f"  F1 Score: {sum(task_f1)/len(task_f1):.4f}")
-        print(f"  Precision: {sum(task_prec)/len(task_prec):.4f}")
-        print(f"  Recall: {sum(task_recall)/len(task_recall):.4f}")
+        print(f"  Exact Match: {task_results[task]['exact_match']:.4f}")
+        print(f"  F1 Score: {task_results[task]['f1_score']:.4f}")
+        print(f"  Precision: {task_results[task]['precision']:.4f}")
+        print(f"  Recall: {task_results[task]['recall']:.4f}")
 
     print("\n" + "=" * 80)
     print("OVERALL METRICS")
@@ -435,17 +444,50 @@ def compute_accuracy_by_task(filepath: str, output_csv: str = None):
     print(f"  Precision: {sum(all_prec)/len(all_prec):.4f}")
     print(f"  Recall: {sum(all_recall)/len(all_recall):.4f}")
     print(f"  TP: {all_TP}, FP: {all_FP}, FN: {all_FN}")
-
-    # 可选导出失败案例
-    if output_csv and failure_cases:
+    
+    # 输出F1分数到CSV文件
+    if output_csv:
         with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            # 写入表头
+            writer.writerow(['Task', 'F1 Score', 'Samples', 'Exact Match', 'Precision', 'Recall'])
+            
+            # 按照指定顺序写入每个任务的结果
+            for task in output_order:
+                if task in task_results:
+                    result = task_results[task]
+                    writer.writerow([
+                        task, 
+                        f"{result['f1_score']:.4f}", 
+                        result['samples'],
+                        f"{result['exact_match']:.4f}",
+                        f"{result['precision']:.4f}",
+                        f"{result['recall']:.4f}"
+                    ])
+            
+            # 写入总体结果
+            writer.writerow([
+                'Overall', 
+                f"{sum(all_f1)/len(all_f1):.4f}", 
+                len(all_em),
+                f"{sum(all_em)/len(all_em):.4f}",
+                f"{sum(all_prec)/len(all_prec):.4f}",
+                f"{sum(all_recall)/len(all_recall):.4f}"
+            ])
+        
+        print(f"\nExported results to: {output_csv}")
+    
+    # 可选导出失败案例
+    if failure_cases:
+        failure_csv = output_csv.replace('.csv', '_failures.csv') if output_csv else 'failures.csv'
+        with open(failure_csv, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=failure_cases[0].keys())
             writer.writeheader()
             writer.writerows(failure_cases)
-        print(f"\nExported {len(failure_cases)} failures to: {output_csv}")
-
+        print(f"Exported {len(failure_cases)} failures to: {failure_csv}")
+        
 # 示例调用
 compute_accuracy_by_task(
-    filepath="/home/ma-user/work/ydu/temporal_reasoning/results/Qwen2.5_7B_Instruct-results_32k_0905.json",
-    output_csv="/home/ma-user/work/ydu/temporal_reasoning/results/long_context_Qwen2.5_7B_Instruct-results_32k_0905-results.csv"
+    filepath="/home/ma-user/work/ydu/temporal_reasoning/results/Qwen2.5_3B_Instruct-Time-RL-acc-sa-tc-06_02_02-results_64k_0905.json",
+    output_csv="/home/ma-user/work/ydu/temporal_reasoning/results/Qwen2.5_3B_Instruct-Time-RL-acc-sa-tc-06_02_02-results_64k_0905.csv"
 )
