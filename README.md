@@ -10,12 +10,12 @@
 </p>
 
 > **TL;DR**  
->  we introduce Memory-T1, a framework that learns a time-aware memory selection policy using reinforcement learning (RL). It employs a coarse-to-fine strategy, first pruning the dialogue history into a candidate set with temporal and retriever filters, followed by an RL agent that selects the precise evidence.**, using a two-phase pipeline: candidate generation (temporal filtering + relevance) → RL fine-tuning for evidence selection and answering.
+> \\TODO: maybe shorter. We introduce Memory-T1, a framework that learns a time-aware memory selection policy using reinforcement learning (RL). It employs a coarse-to-fine strategy, first pruning the dialogue history into a candidate set with temporal and retriever filters, followed by an RL agent that selects the precise evidence.**, using a two-phase pipeline: candidate generation (temporal filtering + relevance) → RL fine-tuning for evidence selection and answering.
 
 
 <div align="center">
   <img src="assets/problem_new_example.jpg" width="80%">
-  <br> Multi-session QA with time-event annotations. \timerange{Time range} marks when an event or query occurs, either a duration or an instantaneous point (start and end coincide). \eventspan{Event span} highlights key evidence in the utterance.
+  <br> Multi-session QA with time-event annotations. Time range marks when an event or query occurs, either a duration or an instantaneous point (start and end coincide). Event span highlights key evidence in the utterance.
 </div>
 
 ---
@@ -75,7 +75,7 @@ Why long-memory temporal QA is hard:
 
 ## Experiments
 
-### Setup (Brief)
+### Setup
 
 - **Datasets**: Time-Dialog, LoCoMo
 - **Backbones**: Qwen2.5-3B, Qwen2.5-7B-Instruct
