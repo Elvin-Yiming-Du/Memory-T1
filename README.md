@@ -3,14 +3,13 @@
 <h1 align="center">Memory-T1: Reinforcement Learning for Temporal Reasoning in Multi-session Agents</h1>
 
 <p align="center">
-  <!-- TODO: Replace links -->
   <a href="#"><strong>Paper</strong></a> ·
-  <a href="#"><strong>arXiv</strong></a> ·
+  <a href="https://arxiv.org/abs/2512.20092"><strong>arXiv</strong></a> ·
   <a href="https://huggingface.co/datasets/ElvinDu518/Memory-T1"><strong>Data Page</strong></a> 
 </p>
 
 > **TL;DR**  
-> \\TODO: maybe shorter. We introduce Memory-T1, a framework that learns a time-aware memory selection policy using reinforcement learning (RL). It employs a coarse-to-fine strategy, first pruning the dialogue history into a candidate set with temporal and retriever filters, followed by an RL agent that selects the precise evidence.**, using a two-phase pipeline: candidate generation (temporal filtering + relevance) → RL fine-tuning for evidence selection and answering.
+> We introduce Memory-T1, a framework that learns a time-aware memory selection policy using reinforcement learning. It employs a coarse-to-fine strategy, first pruning the dialogue history into a candidate set with temporal and retriever filters, followed by an RL agent that selects the precise evidence, using a two-phase pipeline: candidate generation (temporal filtering + relevance) → RL fine-tuning for evidence selection and answering.
 
 
 <div align="center">
