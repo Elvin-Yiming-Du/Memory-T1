@@ -110,13 +110,12 @@ Our model demonstrates strong out-of-domain (OOD) generalization on the LoCoMo b
 ## Citation
 
 ```bibtex
-@inproceedings{...,
-  title     = {Memory-T1: Reinforcement Learning for Temporal Reasoning in Multi-session Agents},
-  author    = {},
-  booktitle = {},
-  year      = {}
-}
-\\TODO 
+@article{du2025memory,
+  title={Memory-T1: Reinforcement Learning for Temporal Reasoning in Multi-session Agents},
+  author={Du, Yiming and Wang, Baojun and Xiang, Yifan and Wang, Zhaowei and Huang, Wenyu and Xue, Boyang and Liang, Bin and Zeng, Xingshan and Mi, Fei and Bai, Haoli and others},
+  journal={arXiv preprint arXiv:2512.20092},
+  year={2025}
+} 
 ```
 
 ---
